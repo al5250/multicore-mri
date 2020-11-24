@@ -1,0 +1,5 @@
+defaults:
+  - dataset: atlas
+  - algorithm: zero_fill
+  - metric: rmse
+  - logger: tensorboard

@@ -1,0 +1,10 @@
+# @package _group_
+_target_: reconstruction.dataset.AtlasDatasetPowerRule
+file_path: ${hydra:runtime.cwd}/data/ATLAS_200x200.mat
+n_kspace: 3
+dim_x: 200
+dim_y: 200
+samp_type: 'y'
+power: 5
+samp_factor: 0.5
+seed: 1111

@@ -1,0 +1,11 @@
+Metadata-Version: 1.2
+Name: reconstruction
+Version: 1.0.0
+Summary: Python package for MRI reconstruction.
+Home-page: UNKNOWN
+Author: Alexander Lin
+Author-email: alin5250@gmail.com
+License: UNKNOWN
+Description: UNKNOWN
+Platform: UNKNOWN
+Requires-Python: >=3.6.1
