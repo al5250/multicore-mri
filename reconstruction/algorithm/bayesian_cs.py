@@ -156,4 +156,4 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
         return alpha
 
     def _samp_probes(self, size: Tuple[int, ...]):
-        return 2 * self.bernoulli.sample(size).to(self.device) - 1
+        return 2 * self.bernoulli.sample(size) - 1
