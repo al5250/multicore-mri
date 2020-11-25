@@ -60,10 +60,10 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
         size_x, size_y = dataset.img_size
         if self.grad_dim == 'x':
             n = size_x
-            k = torch.arange(n).view(1, -1, 1)
+            k = torch.arange(n).view(1, -1, 1).to(self.device)
         elif self.grad_dim == 'y':
             n = size_y
-            k = torch.arange(n).view(1, 1, -1)
+            k = torch.arange(n).view(1, 1, -1).to(self.device)
 
         y = (1 - torch.exp(-2 * np.pi * 1j * k / n)) * kspaces
         y = y.flatten(start_dim=-2)
@@ -80,7 +80,7 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
         imgs = GradientTransform(dim=grad_dim).T(mu.view(-1, size_x, size_y))
         imgs = imgs.clamp(0, 1)
 
-        return imgs.numpy()
+        return imgs.cpu().numpy()
 
     def _fastem(
         self,
@@ -113,7 +113,7 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
 
             grad_dim = -1 if self.grad_dim == 'y' else -2
             imgs = GradientTransform(dim=grad_dim).T(mu.view(-1, *dataset.img_size))
-            imgs = imgs.clamp(0, 1).numpy()
+            imgs = imgs.clamp(0, 1).cpu().numpy()
 
             if self.log_rmses:
                 metric = RootMeanSquareError(percentage=True)
@@ -153,6 +153,5 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
         alpha = 1 / (mu ** 2 + sigma_diag).mean(dim=0)
         return alpha
 
-    @staticmethod
-    def _samp_probes(size: Tuple[int, ...]):
-        return 2 * Bernoulli(0.5).sample(size) - 1
+    def _samp_probes(self, size: Tuple[int, ...]):
+        return 2 * Bernoulli(0.5).sample(size).to(self.device) - 1
