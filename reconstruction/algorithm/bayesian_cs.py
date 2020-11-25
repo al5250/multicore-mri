@@ -52,27 +52,29 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
         if device is None:
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.device = device
+        self.bernoulli = Bernoulli(probs=torch.tensor(0.5, device=device))
 
     @torch.no_grad()
     def reconstruct(self, dataset: MRIDataset, logger: Logger) -> List[ndarray]:
-        masks = torch.tensor([m for m in dataset.kmasks]).to(self.device)
-        kspaces = torch.tensor(dataset.kspaces).to(self.device)
+        kspaces = torch.tensor(dataset.kspaces, device=self.device)
+        kmasks = torch.tensor(dataset.kmasks, device=self.device)
+
         size_x, size_y = dataset.img_size
         if self.grad_dim == 'x':
             n = size_x
-            k = torch.arange(n).view(1, -1, 1).to(self.device)
+            k = torch.arange(n, device=self.device).view(1, -1, 1)
         elif self.grad_dim == 'y':
             n = size_y
-            k = torch.arange(n).view(1, 1, -1).to(self.device)
+            k = torch.arange(n, device=self.device).view(1, 1, -1)
 
         y = (1 - torch.exp(-2 * np.pi * 1j * k / n)) * kspaces
         y = y.flatten(start_dim=-2)
-        masks = masks.flatten(start_dim=-2)
-        index = torch.cat([torch.nonzero(m).view(1, -1) for m in masks], dim=0)
+        kmasks = kmasks.flatten(start_dim=-2)
+        indices = torch.cat([torch.nonzero(m).view(1, -1) for m in kmasks], dim=0)
 
-        y = torch.gather(y, dim=-1, index=index)
-        Phi = Undersampled2DFastFourierTransform(index=index, size=(size_x, size_y))
-        alpha_init = torch.ones(size_x * size_y).to(self.device)
+        y = torch.gather(y, dim=-1, index=indices)
+        Phi = Undersampled2DFastFourierTransform(index=indices, size=(size_x, size_y))
+        alpha_init = torch.ones(size_x * size_y, device=self.device)
 
         alpha, mu, sigma_diag = self._fastem(y, Phi, alpha_init, logger, dataset)
 
@@ -154,4 +156,4 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
         return alpha
 
     def _samp_probes(self, size: Tuple[int, ...]):
-        return 2 * Bernoulli(0.5).sample(size).to(self.device) - 1
+        return 2 * self.bernoulli.sample(size).to(self.device) - 1
