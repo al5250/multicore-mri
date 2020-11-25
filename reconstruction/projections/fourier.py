@@ -25,7 +25,7 @@ class Undersampled2DFastFourierTransform(Projection):
 
     def T_apply(self, y: Tensor) -> Tensor:
         out_size = y.size()[:-1] + (self.N,)
-        y_ = torch.zeros(out_size).to(y)
+        y_ = torch.zeros(out_size, device=y.device, dtype=y.dtype)
         y_.scatter_(dim=-1, index=self.index.expand_as(y), src=y)
         y_ = y_.unflatten(dim=-1, sizes=self.size)
         x_ = ifftn(y_, dim=(-2, -1), norm='ortho').real
