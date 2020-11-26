@@ -8,6 +8,7 @@ import torch
 from torch import Tensor
 from torch.distributions import Bernoulli
 from torch.fft import fftn, ifftn
+import matplotlib.pyplot as plt
 
 import pdb
 import time
@@ -91,6 +92,16 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
 
         imgs = self._grad_to_img(mu, size_x, size_y)
         imgs = imgs.clamp(0, 1)
+
+        var = self._compute_img_var(
+            Phi, alpha, size_x, size_y, num_probes=30, max_cg_iters=64
+        )
+
+        var = var.cpu().numpy()
+
+        logger.log_imgs(
+            f"{str(self)}/Variances", var
+        )
 
         return imgs.cpu().numpy()
 
@@ -235,3 +246,47 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
             img = ifftn(img_fft, dim=(-2, -1), norm='ortho').real
 
             return img
+
+    def _compute_img_var(
+        self,
+        Phi: Projection,
+        alpha: Tensor,
+        size_x: int,
+        size_y: int,
+        num_probes: int,
+        max_cg_iters: int = 32,
+        cg_tol: float = 1e-10
+    ) -> Tensor:
+        num_contrasts = alpha.size(dim=0)
+        mask = (self.kspaces == 0)
+
+        ky = torch.arange(size_y, device=self.device).view(1, 1, -1)
+        kfactor_y = (1 - torch.exp(-2 * np.pi * 1j * ky / size_y))
+        corr = torch.zeros((1, size_x, size_y), device=self.device)
+        corr[0, :, 0] = 1
+        norm = (torch.abs(kfactor_y) ** 2) + corr
+
+        normalized_kfactor_y = kfactor_y / norm
+
+        z = self._samp_probes(
+            (num_probes, self.num_grads, num_contrasts, size_x, size_y)
+        )
+        b = fftn(z, dim=(-2, -1), norm='ortho')
+        b = mask * b
+        b = normalized_kfactor_y * b
+        b = ifftn(b, dim=(-2, -1), norm='ortho')
+        b = b.flatten(start_dim=-2)
+
+        A = lambda x: self.alpha0 * (Phi.T(Phi(x))) + alpha * x
+        x = conjugate_gradient(A, b, -1, max_cg_iters, cg_tol)
+
+        x = x.unflatten(dim=-1, sizes=(size_x, size_y))
+        x = fftn(x, dim=(-2, -1), norm='ortho')
+        x = normalized_kfactor_y * x
+        x = mask * x
+        x = ifftn(x, dim=(-2, -1), norm='ortho')
+
+        var = (z * x).mean(dim=0).real.clamp(min=0)
+        var = var.squeeze(dim=0)
+
+        return var
