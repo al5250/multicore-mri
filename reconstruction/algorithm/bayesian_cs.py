@@ -183,15 +183,34 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
     def _grad_to_img(self, grad: Tensor, size_x: int, size_y: int) -> Tensor:
         grad = grad.view((self.num_grads, -1, size_x, size_y))
         if self.num_grads == 1:
-            grad = grad.squeeze(dim=0)
-            grad_dim = -1 if self.grad_dim == 'y' else -2
-            size = list(grad.size())
-            N = size[grad_dim]
-            size[grad_dim] = 1
-            x1 = torch.zeros(size, device=grad.device)
-            x2 = grad.narrow(grad_dim, 1, N-1).cumsum(dim=grad_dim)
-            x = torch.cat([x1, x2], dim=grad_dim)
-            return x
+            # grad = grad.squeeze(dim=0)
+            # grad_dim = -1 if self.grad_dim == 'y' else -2
+            # size = list(grad.size())
+            # N = size[grad_dim]
+            # size[grad_dim] = 1
+            # x1 = torch.zeros(size, device=grad.device)
+            # x2 = grad.narrow(grad_dim, 1, N-1).cumsum(dim=grad_dim)
+            # x = torch.cat([x1, x2], dim=grad_dim)
+            # return x
+
+            grad_y = grad.squeeze(dim=0)
+
+            ky = torch.arange(size_y, device=self.device).view(1, 1, -1)
+            kfactor_y = (1 - torch.exp(-2 * np.pi * 1j * ky / size_y))
+
+            grad_y_fft = fftn(grad_y, dim=(-2, -1), norm='ortho')
+
+            img_fft = torch.conj(kfactor_y) * grad_y_fft
+
+            corr = torch.zeros((1, size_x, size_y), device=self.device)
+            corr[0, :, 0] = 1
+            norm = (torch.abs(kfactor_y) ** 2) + corr
+
+            img_fft = img_fft / norm * (self.kspaces == 0) + self.kspaces
+
+            img = ifftn(img_fft, dim=(-2, -1), norm='ortho').real
+
+            return img
 
         elif self.num_grads == 2:
             grad_x, grad_y = grad

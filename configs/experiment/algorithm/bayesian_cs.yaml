@@ -3,3 +3,4 @@ _target_: reconstruction.algorithm.BayesianCompressedSensing
 log_rmses: True
 num_probes: 30
 grad_dim: 'y'
+max_iters: 40
