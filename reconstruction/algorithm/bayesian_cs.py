@@ -286,7 +286,7 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
         x = mask * x
         x = ifftn(x, dim=(-2, -1), norm='ortho')
 
-        var = (z * x).mean(dim=0).real.clamp(min=0)
+        var = (z * x).real.mean(dim=0).clamp(min=0)
         var = var.squeeze(dim=0)
 
         return var
