@@ -94,13 +94,20 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
         imgs = imgs.clamp(0, 1)
 
         var = self._compute_img_var(
-            Phi, alpha, size_x, size_y, num_probes=30, max_cg_iters=64
+            Phi, alpha, size_x, size_y, num_probes=30, max_cg_iters=256
         )
-
         var = var.cpu().numpy()
+        var = np.array([v / v.max() for v in var])
 
         logger.log_imgs(
-            f"{str(self)}/Variances", var
+            f"{str(self)}/Variances", var 
+        )
+
+        err = np.abs(np.array(dataset.imgs) - imgs.cpu().numpy())
+        err = np.array([a / a.max() for a in err])
+
+        logger.log_imgs(
+            f"{str(self)}/Errors", err
         )
 
         return imgs.cpu().numpy()
@@ -257,36 +264,38 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
         max_cg_iters: int = 32,
         cg_tol: float = 1e-10
     ) -> Tensor:
-        num_contrasts = alpha.size(dim=0)
-        mask = (self.kspaces == 0)
+        num_contrasts = 3
+        mask = (self.kspaces == 0).unsqueeze(0)
 
-        ky = torch.arange(size_y, device=self.device).view(1, 1, -1)
+        ky = torch.arange(size_y, device=self.device).view(1, 1, 1, -1)
         kfactor_y = (1 - torch.exp(-2 * np.pi * 1j * ky / size_y))
-        corr = torch.zeros((1, size_x, size_y), device=self.device)
-        corr[0, :, 0] = 1
+        corr = torch.zeros((1, 1, size_x, size_y), device=self.device)
+        corr[0, 0, :, 0] = 1e-10
         norm = (torch.abs(kfactor_y) ** 2) + corr
 
-        normalized_kfactor_y = kfactor_y / norm
+        normalized_kfactor_y = torch.conj(kfactor_y) / norm
 
         z = self._samp_probes(
-            (num_probes, self.num_grads, num_contrasts, size_x, size_y)
+            (num_probes, num_contrasts, size_x, size_y)
         )
         b = fftn(z, dim=(-2, -1), norm='ortho')
         b = mask * b
-        b = normalized_kfactor_y * b
-        b = ifftn(b, dim=(-2, -1), norm='ortho')
+        b = torch.conj(normalized_kfactor_y) * b
+        b = ifftn(b, dim=(-2, -1), norm='ortho').real
         b = b.flatten(start_dim=-2)
-
+        
+        b = b.unsqueeze(dim=1)
+        alpha = alpha.squeeze(dim=0).unsqueeze(dim=0).unsqueeze(dim=0).unsqueeze(dim=1)
         A = lambda x: self.alpha0 * (Phi.T(Phi(x))) + alpha * x
         x = conjugate_gradient(A, b, -1, max_cg_iters, cg_tol)
+        x = x.squeeze(dim=1)
 
         x = x.unflatten(dim=-1, sizes=(size_x, size_y))
         x = fftn(x, dim=(-2, -1), norm='ortho')
         x = normalized_kfactor_y * x
         x = mask * x
-        x = ifftn(x, dim=(-2, -1), norm='ortho')
+        x = ifftn(x, dim=(-2, -1), norm='ortho').real
 
-        var = (z * x).real.mean(dim=0).clamp(min=0)
-        var = var.squeeze(dim=0)
+        var = (z * x).mean(dim=0).clamp(min=0)
 
         return var
