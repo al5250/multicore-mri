@@ -30,13 +30,14 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
     def __init__(
         self,
         grad_dim: str = 'y',
-        max_iters: int = 40,
+        num_em_iters: int = 40,
         max_alpha_diff: float = 1e6,
         num_probes: int = 30,
-        max_cg_iters: int = 32,
+        num_init_cg_iters: int = 32,
         cg_tol: float = 1e-10,
         alpha0: float = 3e5,
         log_imgs_interval: Optional[int] = 5,
+        log_variances: bool = False,
         log_rmses: bool = False,
         device: Optional[str] = None
     ) -> None:
@@ -45,14 +46,16 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
         self.grad_dim = grad_dim
         self.num_grads = len(grad_dim)
 
-        self.max_iters = max_iters
+        self.num_em_iters = num_em_iters
         self.max_alpha_diff = max_alpha_diff
         self.num_probes = num_probes
-        self.max_cg_iters = max_cg_iters
+        self.num_init_cg_iters = num_init_cg_iters
         self.cg_tol = cg_tol
         self.alpha0 = alpha0
         self.log_imgs_interval = log_imgs_interval
+        self.log_variances = log_variances
         self.log_rmses = log_rmses
+
         if device is None:
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.device = device
@@ -61,7 +64,6 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
     @torch.no_grad()
     def reconstruct(self, dataset: MRIDataset, logger: Logger) -> List[ndarray]:
         kspaces = torch.tensor(dataset.kspaces, device=self.device)
-        self.kspaces = kspaces
         kmasks = torch.tensor(dataset.kmasks, device=self.device)
 
         size_x, size_y = dataset.img_size
@@ -80,48 +82,42 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
         data = torch.stack(data_lst, dim=0)
         data = data.flatten(start_dim=-2)
 
-        kmasks = kmasks.flatten(start_dim=-2)
-        indices = torch.cat([torch.nonzero(m).view(1, -1) for m in kmasks], dim=0)
+        flat_kmasks = kmasks.flatten(start_dim=-2)
+        indices = torch.cat([torch.nonzero(m).view(1, -1) for m in flat_kmasks], dim=0)
         indices = indices.expand((self.num_grads, -1, indices.size(-1)))
 
         data = torch.gather(data, dim=-1, index=indices)
         Phi = Undersampled2DFastFourierTransform(index=indices, size=(size_x, size_y))
         alpha_init = torch.ones(self.num_grads, size_x * size_y, device=self.device)
 
-        alpha, mu, sigma_diag = self._fastem(data, Phi, alpha_init, logger, dataset)
-
-        imgs = self._grad_to_img(mu, size_x, size_y)
-        imgs = imgs.clamp(0, 1)
-
-        var = self._compute_img_var(
-            Phi, alpha, size_x, size_y, num_probes=30, max_cg_iters=256
-        )
-        var = var.cpu().numpy()
-        var = np.array([v / v.max() for v in var])
-
-        logger.log_imgs(
-            f"{str(self)}/Variances", var 
+        alpha, mu, sigma_diag, imgs = self._fastem(
+            data, Phi, alpha_init, kspaces, dataset, logger
         )
 
-        err = np.abs(np.array(dataset.imgs) - imgs.cpu().numpy())
-        err = np.array([a / a.max() for a in err])
+        if self.log_variances:
+            variances = self._compute_variances(
+                Phi, alpha, kmasks, self.num_probes, num_cg_iters=256
+            )
+            variances = variances.cpu().numpy()
+            variances = np.array([v / v.max() for v in variances])
 
-        logger.log_imgs(
-            f"{str(self)}/Errors", err
-        )
+            logger.log_imgs(
+                f"{str(self)}/Variances", variances
+            )
 
-        return imgs.cpu().numpy()
+        return imgs
 
     def _fastem(
         self,
         y: Tensor,
         Phi: Projection,
         alpha_init: Tensor,
-        logger: Logger,
-        dataset: MRIDataset
-    ) -> Tuple[Tensor, Tensor, Tensor]:
-        size_x, size_y = dataset.img_size
-        num_contrasts = y.size(dim=1)
+        kspaces: Tensor,
+        dataset: MRIDataset,
+        logger: Logger
+    ) -> Tuple[Tensor, Tensor, Tensor, List[ndarray]]:
+        num_contrasts, size_x, size_y = kspaces.size()
+        num_cg_iters = self.num_init_cg_iters
 
         alpha = alpha_init
         mu = torch.zeros(
@@ -131,15 +127,14 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
         )
         sigma_diag = torch.zeros_like(mu)
 
-        for i in range(self.max_iters):
+        for i in range(self.num_em_iters):
             t = time.time()
-            mu_new, sigma_diag_new = self._estep(alpha, y, Phi)
+            mu_new, sigma_diag_new = self._estep(alpha, y, Phi, num_cg_iters)
             alpha_new = self._mstep(mu_new, sigma_diag_new)
 
             alpha_diff = torch.abs(alpha_new - alpha).mean().item()
             if alpha_diff > self.max_alpha_diff:
-                print('Got Here')
-                self.max_cg_iters *= 2
+                num_cg_iters *= 2
                 continue
             else:
                 alpha = alpha_new
@@ -147,9 +142,11 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
                 sigma_diag = sigma_diag_new
 
             logger.log_vals(f"{str(self)}/alpha_diff", {'alpha_diff': alpha_diff}, i)
-            logger.log_vals(f"{str(self)}/max_cg_iters", {'max_cg_iters': self.max_cg_iters}, i)
+            logger.log_vals(
+                f"{str(self)}/num_cg_iters", {'num_cg_iters': num_cg_iters}, i
+            )
 
-            imgs = self._grad_to_img(mu, size_x, size_y)
+            imgs = self._compute_imgs(mu, kspaces)
             imgs = imgs.clamp(0, 1).cpu().numpy()
 
             if self.log_rmses:
@@ -169,13 +166,14 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
                 )
             print(time.time() - t, combined_rmse)
 
-        return alpha, mu, sigma_diag
+        return alpha, mu, sigma_diag, imgs
 
     def _estep(
         self,
         alpha: Tensor,
         y: Tensor,
         Phi: Projection,
+        num_cg_iters: int
     ) -> Tuple[Tensor, Tensor]:
         b0 = self.alpha0 * Phi.T(y.unsqueeze(dim=0))
         num_contrasts = y.size(dim=1)
@@ -186,7 +184,7 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
         b = torch.cat([b0, b1], dim=0)
         alpha = alpha.unsqueeze(dim=1)
         A = lambda x: self.alpha0 * (Phi.T(Phi(x))) + alpha * x
-        x = conjugate_gradient(A, b, -1, self.max_cg_iters, self.cg_tol)
+        x = conjugate_gradient(A, b, -1, num_cg_iters, self.cg_tol)
         mu = x[0]
         sigma_diag = (b1 * x[1:]).mean(dim=0).clamp(min=0)
         return mu, sigma_diag
@@ -198,104 +196,117 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
     def _samp_probes(self, size: Tuple[int, ...]):
         return 2 * self.bernoulli.sample(size) - 1
 
-    def _grad_to_img(self, grad: Tensor, size_x: int, size_y: int) -> Tensor:
+    def _compute_imgs(
+        self,
+        grad: Tensor,
+        kspaces: Tensor
+    ) -> Tensor:
+        num_contrasts, size_x, size_y = kspaces.size()
         grad = grad.view((self.num_grads, -1, size_x, size_y))
-        if self.num_grads == 1:
-            # grad = grad.squeeze(dim=0)
-            # grad_dim = -1 if self.grad_dim == 'y' else -2
-            # size = list(grad.size())
-            # N = size[grad_dim]
-            # size[grad_dim] = 1
-            # x1 = torch.zeros(size, device=grad.device)
-            # x2 = grad.narrow(grad_dim, 1, N-1).cumsum(dim=grad_dim)
-            # x = torch.cat([x1, x2], dim=grad_dim)
-            # return x
 
-            grad_y = grad.squeeze(dim=0)
+        img_fft = torch.tensor(0., device=self.device)
+        norm = torch.tensor(0., device=self.device)
 
-            ky = torch.arange(size_y, device=self.device).view(1, 1, -1)
-            kfactor_y = (1 - torch.exp(-2 * np.pi * 1j * ky / size_y))
-
-            grad_y_fft = fftn(grad_y, dim=(-2, -1), norm='ortho')
-
-            img_fft = torch.conj(kfactor_y) * grad_y_fft
-
-            corr = torch.zeros((1, size_x, size_y), device=self.device)
-            corr[0, :, 0] = 1
-            norm = (torch.abs(kfactor_y) ** 2) + corr
-
-            img_fft = img_fft / norm * (self.kspaces == 0) + self.kspaces
-
-            img = ifftn(img_fft, dim=(-2, -1), norm='ortho').real
-
-            return img
-
-        elif self.num_grads == 2:
-            grad_x, grad_y = grad
-
+        if 'x' in self.grad_dim:
             kx = torch.arange(size_x, device=self.device).view(1, -1, 1)
             kfactor_x = (1 - torch.exp(-2 * np.pi * 1j * kx / size_x))
 
+            grad_x = grad[0]
+            grad_x_fft = fftn(grad_x, dim=(-2, -1), norm='ortho')
+
+            img_fft = img_fft + torch.conj(kfactor_x) * grad_x_fft
+            norm = norm + torch.abs(kfactor_x) ** 2
+
+        if 'y' in self.grad_dim:
             ky = torch.arange(size_y, device=self.device).view(1, 1, -1)
             kfactor_y = (1 - torch.exp(-2 * np.pi * 1j * ky / size_y))
 
-            grad_x_fft = fftn(grad_x, dim=(-2, -1), norm='ortho')
+            grad_y = grad[-1]
             grad_y_fft = fftn(grad_y, dim=(-2, -1), norm='ortho')
 
-            img_fft = torch.conj(kfactor_x) * grad_x_fft + torch.conj(kfactor_y) * grad_y_fft
+            img_fft = img_fft + torch.conj(kfactor_y) * grad_y_fft
+            norm = norm + torch.abs(kfactor_y) ** 2
 
-            corr = torch.zeros((1, size_x, size_y), device=self.device)
+        corr = torch.zeros((1, size_x, size_y), device=self.device)
+        if self.grad_dim == 'x':
+            corr[0, 0, :] = 1
+        elif self.grad_dim == 'y':
+            corr[0, :, 0] = 1
+        elif self.grad_dim == 'xy':
             corr[0, 0, 0] = 1
-            norm = (torch.abs(kfactor_x) ** 2 + torch.abs(kfactor_y) ** 2) + corr
+        norm = norm + corr
 
-            img_fft = img_fft / norm * (self.kspaces == 0) + self.kspaces
+        img_fft = img_fft / norm * (kspaces == 0) + kspaces
+        img = ifftn(img_fft, dim=(-2, -1), norm='ortho').real
 
-            img = ifftn(img_fft, dim=(-2, -1), norm='ortho').real
+        return img
 
-            return img
-
-    def _compute_img_var(
+    def _compute_variances(
         self,
         Phi: Projection,
         alpha: Tensor,
-        size_x: int,
-        size_y: int,
+        kmasks: Tensor,
         num_probes: int,
-        max_cg_iters: int = 32,
+        num_cg_iters: int = 32,
         cg_tol: float = 1e-10
     ) -> Tensor:
-        num_contrasts = 3
-        mask = (self.kspaces == 0).unsqueeze(0)
 
-        ky = torch.arange(size_y, device=self.device).view(1, 1, 1, -1)
-        kfactor_y = (1 - torch.exp(-2 * np.pi * 1j * ky / size_y))
-        corr = torch.zeros((1, 1, size_x, size_y), device=self.device)
-        corr[0, 0, :, 0] = 1e-10
-        norm = (torch.abs(kfactor_y) ** 2) + corr
+        num_contrasts, size_x, size_y = kmasks.size()
+        masks = ~kmasks.unsqueeze(dim=0)
 
-        normalized_kfactor_y = torch.conj(kfactor_y) / norm
-
-        z = self._samp_probes(
-            (num_probes, num_contrasts, size_x, size_y)
-        )
+        z = self._samp_probes((num_probes, num_contrasts, size_x, size_y))
         b = fftn(z, dim=(-2, -1), norm='ortho')
-        b = mask * b
-        b = torch.conj(normalized_kfactor_y) * b
+        b = masks * b
+
+        b_lst = []
+        norm = torch.tensor(0., device=self.device)
+
+        if 'x' in self.grad_dim:
+            kx = torch.arange(size_x, device=self.device).view(1, 1, -1, 1)
+            kfactor_x = (1 - torch.exp(-2 * np.pi * 1j * kx / size_x))
+            b_x = kfactor_x * b
+            b_lst.append(b_x)
+            norm = norm + torch.abs(kfactor_x) ** 2
+
+        if 'y' in self.grad_dim:
+            ky = torch.arange(size_y, device=self.device).view(1, 1, 1, -1)
+            kfactor_y = (1 - torch.exp(-2 * np.pi * 1j * ky / size_y))
+            b_y = kfactor_y * b
+            b_lst.append(b_y)
+            norm = norm + torch.abs(kfactor_y) ** 2
+
+        corr = torch.zeros((1, 1, size_x, size_y), device=self.device)
+        if self.grad_dim == 'x':
+            corr[0, 0, 0, :] = 1
+        elif self.grad_dim == 'y':
+            corr[0, 0, :, 0] = 1
+        elif self.grad_dim == 'xy':
+            corr[0, 0, 0, 0] = 1
+        norm = norm + corr
+        b = torch.stack(b_lst, dim=1) / norm.unsqueeze(dim=1)
+
         b = ifftn(b, dim=(-2, -1), norm='ortho').real
         b = b.flatten(start_dim=-2)
-        
-        b = b.unsqueeze(dim=1)
-        alpha = alpha.squeeze(dim=0).unsqueeze(dim=0).unsqueeze(dim=0).unsqueeze(dim=1)
+
+        alpha = alpha.unsqueeze(dim=1).unsqueeze(dim=0)
         A = lambda x: self.alpha0 * (Phi.T(Phi(x))) + alpha * x
-        x = conjugate_gradient(A, b, -1, max_cg_iters, cg_tol)
-        x = x.squeeze(dim=1)
+        out = conjugate_gradient(A, b, -1, num_cg_iters, cg_tol)
 
-        x = x.unflatten(dim=-1, sizes=(size_x, size_y))
-        x = fftn(x, dim=(-2, -1), norm='ortho')
-        x = normalized_kfactor_y * x
-        x = mask * x
-        x = ifftn(x, dim=(-2, -1), norm='ortho').real
+        out = out.unflatten(dim=-1, sizes=(size_x, size_y))
+        out = fftn(out, dim=(-2, -1), norm='ortho')
 
-        var = (z * x).mean(dim=0).clamp(min=0)
+        if 'x' in self.grad_dim:
+            out[:, 0] = torch.conj(kfactor_x) * out[:, 0] / norm
+        if 'y' in self.grad_dim:
+            out[:, -1] = torch.conj(kfactor_y) * out[:, -1] / norm
 
+        if self.grad_dim == 'xy':
+            out = out[:, 0] + out[:, -1]
+        else:
+            out = out.squeeze(dim=1)
+
+        out = masks * out
+        out = ifftn(out, dim=(-2, -1), norm='ortho').real
+
+        var = (z * out).mean(dim=0).clamp(min=0)
         return var
