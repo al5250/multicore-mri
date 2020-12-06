@@ -14,7 +14,8 @@ from reconstruction.metric import RootMeanSquareError
 
 class ZeroFilling(ReconstructionAlgorithm):
 
-    def __init__(self) -> None:
+    def __init__(self, complex_imgs: bool = False) -> None:
+        self.complex_imgs = complex_imgs
         pass
 
     @torch.no_grad()
@@ -28,4 +29,10 @@ class ZeroFilling(ReconstructionAlgorithm):
             f"{str(self)}/{str(combined_metric)}", {'Combined': combined_rmse}
         )
 
-        return [x.real.clamp(0, 1).numpy()for x in imgs]
+        if self.complex_imgs:
+            imgs.real = imgs.real.clamp(0, 1)
+            imgs.imag = imgs.imag.clamp(0, 1)
+        else:
+            imgs = imgs.real.clamp(0, 1)
+
+        return [x.numpy()for x in imgs]

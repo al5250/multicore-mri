@@ -31,14 +31,16 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
         self,
         grad_dim: str = 'y',
         num_em_iters: int = 40,
-        max_alpha_diff: float = 1e6,
+        max_alpha_diff: Optional[float] = None,
+        max_alpha_ratio: float = 1.,
         num_probes: int = 30,
         num_init_cg_iters: int = 32,
         cg_tol: float = 1e-10,
-        alpha0: float = 3e5,
+        alpha0: float = 1e10,
         log_imgs_interval: Optional[int] = 5,
         log_variances: bool = False,
         log_rmses: bool = False,
+        complex_imgs: bool = False,
         device: Optional[str] = None
     ) -> None:
         if grad_dim not in ['x', 'y', 'xy']:
@@ -47,6 +49,9 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
         self.num_grads = len(grad_dim)
 
         self.num_em_iters = num_em_iters
+        if max_alpha_diff is None:
+            max_alpha_diff = float('inf')
+        self.max_alpha_ratio = max_alpha_ratio
         self.max_alpha_diff = max_alpha_diff
         self.num_probes = num_probes
         self.num_init_cg_iters = num_init_cg_iters
@@ -55,6 +60,7 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
         self.log_imgs_interval = log_imgs_interval
         self.log_variances = log_variances
         self.log_rmses = log_rmses
+        self.complex_imgs = complex_imgs
 
         if device is None:
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -63,10 +69,43 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
 
     @torch.no_grad()
     def reconstruct(self, dataset: MRIDataset, logger: Logger) -> List[ndarray]:
-        kspaces = torch.tensor(dataset.kspaces, device=self.device)
-        kmasks = torch.tensor(dataset.kmasks, device=self.device)
 
-        size_x, size_y = dataset.img_size
+        kspaces = torch.tensor(dataset.kspaces, device=self.device)
+
+        if self.complex_imgs:
+            zero_fill = ifftn(kspaces, dim=(-2, -1), norm='ortho').cpu().numpy()
+            self.bias = (np.real(zero_fill).min() + 1j * np.imag(zero_fill).min())
+            max_val = np.max([np.real(zero_fill).max(), np.imag(zero_fill).max()])
+            self.scale = max_val - np.min([self.bias.real, self.bias.imag])
+        else:
+            zero_fill = ifftn(kspaces, dim=(-2, -1), norm='ortho').cpu().numpy().real
+            self.bias = np.real(zero_fill).min()
+            max_val = np.real(zero_fill).max()
+            self.scale = max_val - self.bias
+
+        for i in range(kspaces.size(dim=0)):
+            kspaces[i, 0, 0] -= self.bias * kspaces.size(dim=1)
+
+        kspaces /= self.scale
+
+        self.kspaces = kspaces
+        self.dataset = dataset
+        kmasks = torch.tensor(dataset.kmasks, device=self.device)
+        self.kmasks = kmasks
+        # pdb.set_trace()
+        num_contrasts, size_x, size_y = kspaces.size()
+
+        if self.complex_imgs:
+            # Split real/imaginary channels as extra contrasts
+            kspaces_sym = torch.conj(kspaces)
+            kspaces_sym = torch.flip(kspaces_sym, dims=(-2, -1))
+            kspaces_sym = torch.roll(kspaces_sym, shifts=(1, 1), dims=(-2, -1))
+            kspaces_real = 0.5 * (kspaces + kspaces_sym)
+            kspaces_imag = -0.5j * (kspaces - kspaces_sym)
+
+            kspaces = torch.cat([kspaces_real, kspaces_imag], dim=0)
+            kmasks = torch.cat([kmasks, kmasks], dim=0)
+            num_contrasts *= 2
 
         data_lst = []
         if 'x' in self.grad_dim:
@@ -84,11 +123,11 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
 
         flat_kmasks = kmasks.flatten(start_dim=-2)
         indices = torch.cat([torch.nonzero(m).view(1, -1) for m in flat_kmasks], dim=0)
-        indices = indices.expand((self.num_grads, -1, indices.size(-1)))
+        indices = indices.expand((self.num_grads, num_contrasts, indices.size(dim=-1)))
 
         data = torch.gather(data, dim=-1, index=indices)
         Phi = Undersampled2DFastFourierTransform(index=indices, size=(size_x, size_y))
-        alpha_init = torch.ones(self.num_grads, size_x * size_y, device=self.device)
+        alpha_init = 1e3 * torch.ones(self.num_grads, size_x * size_y, device=self.device)
 
         alpha, mu, sigma_diag, imgs = self._fastem(
             data, Phi, alpha_init, kspaces, dataset, logger
@@ -118,6 +157,7 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
     ) -> Tuple[Tensor, Tensor, Tensor, List[ndarray]]:
         num_contrasts, size_x, size_y = kspaces.size()
         num_cg_iters = self.num_init_cg_iters
+        factor = 1
 
         alpha = alpha_init
         mu = torch.zeros(
@@ -129,25 +169,41 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
 
         for i in range(self.num_em_iters):
             t = time.time()
+
+            self.x = None
+            self.b1 = None
+            alpha_diff = float('inf')
+
             mu_new, sigma_diag_new = self._estep(alpha, y, Phi, num_cg_iters)
             alpha_new = self._mstep(mu_new, sigma_diag_new)
+            alpha_diff = (torch.abs(alpha_new - alpha).mean()).item()
+            alpha_ratio = alpha_diff / (torch.abs(alpha).mean()).item()
 
-            alpha_diff = torch.abs(alpha_new - alpha).mean().item()
-            if alpha_diff > self.max_alpha_diff:
-                num_cg_iters *= 2
-                continue
-            else:
-                alpha = alpha_new
-                mu = mu_new
-                sigma_diag = sigma_diag_new
+            alpha = alpha_new
+            mu = mu_new
+            sigma_diag = sigma_diag_new
+
+            # mu_new, sigma_diag_new = self._estep(alpha, y, Phi, num_cg_iters)
+            # alpha_new = self._mstep(mu_new, sigma_diag_new)
+            #
+            # alpha_diff = torch.abs(alpha_new - alpha).mean().item()
+            # if alpha_diff > self.max_alpha_diff:
+            #     print('Got Here')
+            #     num_cg_iters *= 2
+            #     continue
+            # else:
+            #     alpha = alpha_new
+            #     mu = mu_new
+            #     sigma_diag = sigma_diag_new
 
             logger.log_vals(f"{str(self)}/alpha_diff", {'alpha_diff': alpha_diff}, i)
+            logger.log_vals(f"{str(self)}/alpha_ratio", {'alpha_ratio': alpha_ratio}, i)
             logger.log_vals(
                 f"{str(self)}/num_cg_iters", {'num_cg_iters': num_cg_iters}, i
             )
 
             imgs = self._compute_imgs(mu, kspaces)
-            imgs = imgs.clamp(0, 1).cpu().numpy()
+            imgs = imgs.cpu().numpy()
 
             if self.log_rmses:
                 metric = RootMeanSquareError(percentage=True)
@@ -184,7 +240,16 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
         b = torch.cat([b0, b1], dim=0)
         alpha = alpha.unsqueeze(dim=1)
         A = lambda x: self.alpha0 * (Phi.T(Phi(x))) + alpha * x
-        x = conjugate_gradient(A, b, -1, num_cg_iters, self.cg_tol)
+
+        def stop_criterion(x):
+            mu_new = x[0]
+            sigma_diag_new = (b1 * x[1:]).mean(dim=0).clamp(min=0)
+            alpha_new = self._mstep(mu_new, sigma_diag_new)
+            alpha_diff = torch.abs(alpha_new - alpha).mean().item()
+            alpha_ratio = alpha_diff / (torch.abs(alpha).mean()).item()
+            return alpha_ratio < self.max_alpha_ratio
+
+        x = conjugate_gradient(A, b, -1, num_cg_iters, self.cg_tol, self.x, stop_criterion=stop_criterion)
         mu = x[0]
         sigma_diag = (b1 * x[1:]).mean(dim=0).clamp(min=0)
         return mu, sigma_diag
@@ -202,7 +267,13 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
         kspaces: Tensor
     ) -> Tensor:
         num_contrasts, size_x, size_y = kspaces.size()
-        grad = grad.view((self.num_grads, -1, size_x, size_y))
+        grad = grad.view((self.num_grads, num_contrasts, size_x, size_y))
+        grad_old = grad
+
+        if self.complex_imgs:
+            num_contrasts //= 2
+            grad = grad[:, :num_contrasts] + 1j * grad[:, num_contrasts:]
+            kspaces = kspaces[:num_contrasts]
 
         img_fft = torch.tensor(0., device=self.device)
         norm = torch.tensor(0., device=self.device)
@@ -236,8 +307,22 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
             corr[0, 0, 0] = 1
         norm = norm + corr
 
-        img_fft = img_fft / norm * (kspaces == 0) + kspaces
-        img = ifftn(img_fft, dim=(-2, -1), norm='ortho').real
+        img_fft = img_fft / norm * (self.kspaces == 0) + self.kspaces
+        img = ifftn(img_fft, dim=(-2, -1), norm='ortho')
+        # img.real = img.real.clamp(min=0, max=1)
+        # img.imag = img.imag.clamp(min=0, max=1)
+
+        img = img * self.scale + self.bias
+
+
+        if not self.complex_imgs:
+            img = img.real
+
+        # if self.complex_imgs:
+        #     num_contrasts //= 2
+        #     img_real = img[:num_contrasts]
+        #     img_imag = img[num_contrasts:]
+        #     img = img_real + 1j * img_imag
 
         return img
 

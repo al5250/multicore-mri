@@ -1,8 +1,10 @@
-from typing import Tuple, Callable, Union
+from typing import Tuple, Callable, Union, Optional
 
 import torch
 from torch import Tensor
 from torch.fft import fftn, ifftn
+
+import pdb
 
 
 def conjugate_gradient(
@@ -10,26 +12,43 @@ def conjugate_gradient(
     b: Tensor,
     dim: Union[int, Tuple[int, ...]],
     T: int,
-    tol: float = 1e-10
+    tol: float = 1e-10,
+    x_init: Optional[Tensor] = None,
+    stop_criterion: Optional[Callable[[Tensor], bool]] = None
 ) -> Tensor:
-    x = torch.zeros_like(b)
+    if x_init is None:
+        x = torch.zeros_like(b)
+    else:
+        x = x_init
     r = b
     p = r
     rr = torch.sum(r * r, dim=dim)
-    for t in range(T):
-        Ap = A(p)
-        pAp = torch.sum(p * Ap, dim=dim)
-        alpha = (rr / pAp).unsqueeze(dim=dim)
-        x = x + alpha * p
 
-        r = r - alpha * Ap
-        if torch.all(torch.abs(r) < tol):
-            break
+    if stop_criterion is None:
+        stop_criterion = lambda x: True
 
-        rr_old = rr
-        rr = torch.sum(r * r, dim=dim)
-        beta = (rr / rr_old).unsqueeze(dim=dim)
-        p = r + beta * p
+    cont = True
+    iter_id = 0
+    while cont:
+        iter_id += 1
+        if iter_id > 20:
+            pdb.set_trace()
+        print(f'Got here {iter_id}')
+        for t in range(T):
+            Ap = A(p)
+            pAp = torch.sum(p * Ap, dim=dim)
+            alpha = (rr / pAp).unsqueeze(dim=dim)
+            x = x + alpha * p
+
+            r = r - alpha * Ap
+            if torch.all(torch.abs(r) < tol):
+                return x
+
+            rr_old = rr
+            rr = torch.sum(r * r, dim=dim)
+            beta = (rr / rr_old).unsqueeze(dim=dim)
+            p = r + beta * p
+        cont = not stop_criterion(x)
     return x
 
 

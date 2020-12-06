@@ -26,7 +26,26 @@ class TensorboardLogger(Logger):
         imgs: List[ndarray],
         step: Optional[int] = None
     ) -> None:
-        self.writer.add_images(tag, np.expand_dims(np.array(imgs), 1), step, dataformats='NCHW')
+        if np.iscomplexobj(imgs):
+            imgs_real = self._scale(np.real(imgs))
+            imgs_imag = self._scale(np.imag(imgs))
+            self.writer.add_images(
+                tag + '/real', np.expand_dims(imgs_real, 1), step, dataformats='NCHW'
+            )
+            self.writer.add_images(
+                tag + '/imag', np.expand_dims(imgs_imag, 1), step, dataformats='NCHW'
+            )
+        else:
+            imgs = self._scale(np.array(imgs))
+            self.writer.add_images(
+                tag, np.expand_dims(imgs, 1), step, dataformats='NCHW'
+            )
+
+    def _scale(self, imgs: ndarray):
+        max_val = imgs.max()
+        min_val = imgs.min()
+        return (imgs - min_val) / (max_val - min_val)
+
 
     def close(self):
         self.writer.close()

@@ -23,6 +23,7 @@ class PowerRuleSampler(KSampler):
         single_mask: bool = False,
         n_iter: int = 2,
         samp_tol: int = 0,
+        symmetric: bool = False,
         seed: Optional[int] = None
     ) -> None:
         self.n_kspace = n_kspace
@@ -50,6 +51,12 @@ class PowerRuleSampler(KSampler):
         self.single_mask = single_mask
         self.n_iter = n_iter
         self.samp_tol = samp_tol
+
+        # if symmetric and samp_type == 'xy':
+        #     raise NotImplementedError('Symmetric sampling is only implemented for '
+        #     'single-dimensional sampling.')
+        self.symmetric = symmetric
+
         self.seed = seed
 
         self.probs = self._compute_probs()
@@ -113,6 +120,22 @@ class PowerRuleSampler(KSampler):
             mask = np.zeros_like(self.probs)
             while np.abs(mask.sum() - n_samps) > self.samp_tol:
                 mask = (np.random.rand(*self.probs.shape) < self.probs)
+                if self.symmetric:
+                    sym_mask = np.zeros_like(mask)
+                    img_size = np.max(mask.shape)
+                    half_size = img_size // 2
+                    if self.samp_type == 'x':
+                        sym_mask[half_size:, :] = mask[half_size:, :]
+                        sym_mask = (sym_mask + np.roll(np.flipud(sym_mask), (1, 0), axis=(0, 1))) > 0
+                        mask = sym_mask
+                    elif self.samp_type == 'y':
+                        sym_mask[:, half_size:] = mask[:, half_size:]
+                        sym_mask = (sym_mask + np.roll(np.fliplr(sym_mask), (0, 1), axis=(0, 1))) > 0
+                        mask = sym_mask
+                    elif self.samp_type == 'xy':
+                        sym_mask[:, half_size:] = mask[:, half_size:]
+                        sym_mask = (sym_mask + np.roll(np.flipud(np.fliplr(sym_mask)), (1, 1), axis=(0, 1))) > 0
+                        mask = sym_mask
 
             mask_ifft = ifft2(mask / self.probs)
             intr = np.max(np.abs(mask_ifft))
