@@ -1,0 +1,12 @@
+# @package _group_
+_target_: multicore.dataset.SheppLoganDatasetPowerRule
+file_path: ${hydra:runtime.cwd}/data/new_SL.mat
+n_kspace: 3
+dim_x: 128
+dim_y: 128
+samp_type: 'xy'
+power: 5
+samp_factor: 0.25
+seed: 1111
+n_iter: 2
+samp_tol: 0

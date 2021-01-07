@@ -1,2 +1,2 @@
 # @package _group_
-_target_: reconstruction.logger.TensorboardLogger
+_target_: multicore.logger.TensorboardLogger

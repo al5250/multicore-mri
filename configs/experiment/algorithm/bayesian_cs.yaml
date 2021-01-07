@@ -1,8 +1,8 @@
 # @package _group_
-_target_: reconstruction.algorithm.BayesianCompressedSensing
+_target_: multicore.algorithm.BayesianCompressedSensing
 log_rmses: True
 num_probes: 30
-grad_dim: 'y'
+grad_dim: 'xy'
 num_em_iters: 40
 num_init_cg_iters: 32
 log_variances: False
@@ -10,3 +10,7 @@ complex_imgs: False
 alpha0: 3e5
 max_alpha_diff: 1e15
 max_alpha_ratio: 1
+tie_real_imag: True
+alpha_init: 1e3
+normalize: True
+save_img: ~

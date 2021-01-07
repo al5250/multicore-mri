@@ -1,2 +1,2 @@
 # @package _group_
-_target_: reconstruction.algorithm.L1ConjugateGradient
+_target_: multicore.algorithm.L1ConjugateGradient

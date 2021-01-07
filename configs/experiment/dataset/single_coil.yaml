@@ -1,5 +1,5 @@
 # @package _group_
-_target_: reconstruction.dataset.SingleCoilInVivoDatasetPowerRule
+_target_: multicore.dataset.SingleCoilInVivoDatasetPowerRule
 file_path: ${hydra:runtime.cwd}/data/IMG_combo.mat
 n_kspace: 4
 dim_x: 256

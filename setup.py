@@ -7,10 +7,10 @@ from typing import Dict
 import os
 
 
-NAME = "reconstruction"
+NAME = "multicore-mri"
 AUTHOR = "Alexander Lin"
 EMAIL = "alin5250@gmail.com"
-DESCRIPTION = "Python package for MRI reconstruction."
+DESCRIPTION = "Python package for multicontrast reconstruction of MRIs."
 
 
 def readme():
@@ -25,7 +25,7 @@ def required():
 
 # So that we don't import flambe.
 VERSION: Dict[str, str] = {}
-with open("reconstruction/version.py", "r") as version_file:
+with open("multicore/version.py", "r") as version_file:
     exec(version_file.read(), VERSION)
 
 

@@ -1,5 +1,5 @@
 # @package _group_
-_target_: reconstruction.dataset.AtlasDatasetPowerRule
+_target_: multicore.dataset.AtlasDatasetPowerRule
 file_path: ${hydra:runtime.cwd}/data/ATLAS_200x200.mat
 n_kspace: 3
 dim_x: 200

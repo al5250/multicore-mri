@@ -1,0 +1,24 @@
+# @package _group_
+_target_: multicore.algorithm.GeneralizedBCS
+sparse_proj:
+  _target_: multicore.projections.Wavelet2D
+  num_levels: 0
+  wave: db2
+  mode: periodization
+  # _target_: multicore.projections.GradientTransform
+  # dim: -1
+log_rmses: True
+num_probes: 5
+num_em_iters: 30
+num_init_cg_iters: 32
+log_variances: False
+complex_imgs: False
+alpha0: 1
+max_alpha_diff: 1e15
+max_alpha_ratio: 1e15
+alpha_init: 1
+normalize: False
+log_imgs_interval: 5
+save_img: ~
+cg_tol: 1e-10
+dtype: double
