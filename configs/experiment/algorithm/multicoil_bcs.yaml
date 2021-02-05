@@ -1,0 +1,22 @@
+# @package _group_
+_target_: multicore.algorithm.MulticoilBCS
+log_rmses: True
+num_probes: 5
+grad_dim: 'y'
+num_em_iters: 40
+num_init_cg_iters: 32
+log_variances: False
+complex_imgs: False
+alpha0: 3e5
+max_alpha_diff: 1e15
+max_alpha_ratio: 1
+tie_real_imag: True
+alpha_init: 1e3
+normalize: False
+save_img: ~
+cg_tol: 1e-8
+sparse_proj:
+  _target_: multicore.projections.Wavelet2D
+  num_levels: 4
+  wave: db2
+  mode: periodization

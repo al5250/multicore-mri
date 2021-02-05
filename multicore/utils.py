@@ -50,6 +50,53 @@ def conjugate_gradient(
         return x, True
 
 
+def conj_grad(
+    A: Callable[[Tensor], Tensor],
+    b: Tensor,
+    dim: Union[int, Tuple[int, ...]],
+    T: int,
+    tol: float = 1e-10,
+    stop_criterion: Optional[Callable[[Tensor], bool]] = None
+) -> Tuple[Tensor, bool]:
+    x = torch.zeros_like(b)
+    r = b
+    p = r
+    rr = torch.sum(r * r, dim=dim, keepdim=True)
+
+    if stop_criterion is None:
+        stop_criterion = lambda x: True
+
+    cont = True
+    iter_id = 0
+    while cont and iter_id < 20:
+        print(f'Got here {iter_id + 1}')
+        for t in range(T):
+            Ap = A(p)
+            pAp = torch.sum(p * Ap, dim=dim, keepdim=True)
+
+            alpha = rr / pAp
+            x = x + alpha * p
+
+            r = r - alpha * Ap
+
+            metric = (torch.norm(r) / torch.norm(b)) ** 2
+            print(metric)
+            if (metric < tol):
+            # if torch.all(torch.abs(r) < tol):
+                return x, True
+
+            rr_old = rr
+            rr = torch.sum(r * r, dim=dim, keepdim=True)
+            beta = rr / rr_old
+            p = r + beta * p
+        cont = not stop_criterion(x)
+        iter_id += 1
+    if cont:
+        return x, False
+    else:
+        return x, True
+
+
 def finite_diff_2d(data: Tensor, keep_dim: bool = True) -> Tuple[Tensor, Tensor]:
     dx = data[:, 1:, :] - data[:, :-1, :]
     dy = data[:, :, 1:] - data[:, :, :-1]

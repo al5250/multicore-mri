@@ -4,9 +4,9 @@ file_path: ${hydra:runtime.cwd}/data/new_SL.mat
 n_kspace: 3
 dim_x: 128
 dim_y: 128
-samp_type: 'xy'
+samp_type: 'y'
 power: 5
-samp_factor: 0.25
+samp_factor: 1.0
 seed: 1111
 n_iter: 2
 samp_tol: 0

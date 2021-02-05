@@ -21,9 +21,10 @@ class UndersampledFourier2D(Projection):
         if self.apply_grad:
             _, _, H, W = y.size()
             k = torch.arange(H, device=y.device).view(1, 1, -1, 1)
-            denom = torch.abs(k) ** 2
+            factor = 1 - torch.exp(-2 * np.pi * 1j * k / H)
+            denom = torch.abs(factor) ** 2
             denom[:, :, 0, :] = 1
-            y = torch.conj(1 - torch.exp(-2 * np.pi * 1j * k / H)) / denom * y
+            y = torch.conj(factor) / denom * y
         y[..., ~self.mask] = 0
         return y
 
@@ -33,9 +34,10 @@ class UndersampledFourier2D(Projection):
         if self.apply_grad:
             _, _, H, W = y.size()
             k = torch.arange(H, device=y.device).view(1, 1, -1, 1)
-            denom = torch.abs(k) ** 2
+            factor = 1 - torch.exp(-2 * np.pi * 1j * k / H)
+            denom = torch.abs(factor) ** 2
             denom[:, :, 0, :] = 1
-            y = (1 - torch.exp(-2 * np.pi * 1j * k / H)) / denom * y
+            y = factor / denom * y
         x = ifftn(y, dim=(-2, -1), norm='ortho')
         if self.real_input:
             x = x.real

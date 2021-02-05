@@ -7,11 +7,8 @@ from multicore.projections.projection import Projection
 
 class GradientTransform(Projection):
 
-    def __init__(self, dim: int, zeros_first: bool = True) -> None:
+    def __init__(self, dim: int) -> None:
         self.dim = dim
-        if not zeros_first:
-            raise NotImplementedError()
-        self.zeros_first = zeros_first
 
     def apply(self, x: Tensor) -> Tensor:
         # N = x.size(self.dim)

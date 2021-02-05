@@ -1,0 +1,14 @@
+# @package _group_
+_target_: multicore.dataset.SheppLoganMultiCoilDataset
+# file_path: ${hydra:runtime.cwd}/data/new_SL.mat
+file_path: ${hydra:runtime.cwd}/data/ATLAS_128x128.mat
+coil_path: ${hydra:runtime.cwd}/data/sim_8ch_data.mat
+n_kspace: 1
+dim_x: 128
+dim_y: 128
+samp_type: 'y'
+power: 5
+samp_factor: 1.0
+seed: 1111
+n_iter: 2
+samp_tol: 0

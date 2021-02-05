@@ -7,6 +7,7 @@ from multicore.algorithm.bayesian_cs_multicoil import (
     BayesianCompressedSensingMultiCoilForward
 )
 from multicore.algorithm.generalized_bcs import GeneralizedBCS
+from multicore.algorithm.multicoil_bcs import MulticoilBCS
 
 
 __all__ = [
@@ -16,5 +17,6 @@ __all__ = [
     'BayesianCompressedSensing',
     'BayesianCompressedSensingMultiCoil'
     'BayesianCompressedSensingMultiCoilForward',
-    'GeneralizedBCS'
+    'GeneralizedBCS',
+    'MulticoilBCS'
 ]

@@ -28,6 +28,9 @@ from multicore.dataset.sl import (
     SheppLoganDataset,
     SheppLoganDatasetPowerRule
 )
+from multicore.dataset.sl_multi_coil import (
+    SheppLoganMultiCoilDataset
+)
 
 
 __all__ = [
@@ -46,4 +49,5 @@ __all__ = [
     'Atlas128DatasetPowerRule',
     'SheppLoganDataset',
     'SheppLoganDatasetPowerRule'
+    'SheppLoganMultiCoilDataset'
 ]

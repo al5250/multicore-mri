@@ -95,6 +95,8 @@ class GeneralizedBCS(ReconstructionAlgorithm):
         kspaces = torch.tensor(dataset.kspaces, device=self.device, dtype=self.cdtype)
         kmasks = torch.tensor(dataset.kmasks, device=self.device, dtype=torch.bool)
 
+        self.dataset = dataset
+
         print('Num observed', torch.sum(kspaces == 0))
 
         if self.normalize:
@@ -103,14 +105,18 @@ class GeneralizedBCS(ReconstructionAlgorithm):
             bias = 0
             scale = 1
 
-        fourier = UndersampledFourier2D(mask=kmasks, apply_grad=True)
-        # Phi = fourier
-        Phi = Sequential(projs=[self.sparse_proj, fourier], fwd_apply=[False, True])
+        # fourier = UndersampledFourier2D(mask=kmasks, apply_grad=False)
+        coils = torch.tensor(dataset.coils, device=self.device, dtype=self.cdtype)
+        self.coils = coils.unsqueeze(dim=0)
+        kmasks = kmasks.squeeze(dim=0)
+        self.fourier = UndersampledFourier2D(mask=kmasks, apply_grad=False, real_input=False)
+        Phi = self.fourier
+        # Phi = Sequential(projs=[self.sparse_proj, fourier], fwd_apply=[False, True])
         # Phi = Sequential(projs=[self.sparse_proj, fourier], fwd_apply=[True, True])
         # Phi = fourier
 
-        C, H, W = kspaces.size()
-        alpha_init = self.alpha_init * torch.ones(H, W, device=self.device)
+        N, C, H, W = kspaces.size()
+        alpha_init = self.alpha_init * torch.ones(1, 1, H, W, device=self.device)
 
         alpha, mu, sigma_diag, imgs = self._fastem(
             kspaces, Phi, alpha_init, kspaces, dataset, logger, bias, scale
@@ -157,9 +163,9 @@ class GeneralizedBCS(ReconstructionAlgorithm):
         dataset: MRIDataset,
         logger: Logger,
         bias: Union[complex, float] = 0.,
-        scale: float = 1.
+        scale: float = 1.,
     ) -> Tuple[Tensor, Tensor, Tensor, List[ndarray]]:
-        C, H, W = kspaces.size()
+        N, C, H, W = kspaces.size()
 
         alpha = alpha_init
         # alpha[:64, :64] /= 10
@@ -170,13 +176,24 @@ class GeneralizedBCS(ReconstructionAlgorithm):
         # wave_mask = (torch.abs(im) < threshold)
         # alpha[wave_mask] *= 100
 
-        mu = torch.zeros(size=(C, H, W), device=self.device, dtype=self.dtype)
-        sigma_diag = torch.zeros_like(mu)
+        # mu = torch.zeros(size=(C, H, W), device=self.device, dtype=self.dtype)
+        # mu_init = Phi.T(y.unsqueeze(dim=0)).squeeze(dim=0)
+        # mu = mu_init
+        # sigma_diag = 1e-6 + torch.zeros_like(mu)
 
+        # alpha = 1 / (mu ** 2 + sigma_diag).mean(dim=0)
+
+        # gamma = (mu ** 2 + sigma_diag).mean(dim=0)
+        #
         num_cg_iters = self.num_init_cg_iters
 
         for i in range(self.num_em_iters):
             t = time.time()
+
+            # mu = (gamma / (gamma + 1e-6)).unsqueeze(dim=0) * mu_init
+            # sigma_diag = gamma - gamma * gamma / (gamma + 1e-6)
+            #
+            # gamma = (mu ** 2 + sigma_diag).mean(dim=0)
 
             alpha_diff = float('inf')
 
@@ -199,10 +216,10 @@ class GeneralizedBCS(ReconstructionAlgorithm):
             )
 
             logger.log_imgs(
-                f"{str(self)}/Sparsity", mu, i
+                f"{str(self)}/Sparsity", mu.squeeze(dim=0), i
             )
 
-            imgs = self._compute_imgs(mu, bias, scale)
+            imgs = self._compute_imgs(mu, bias, scale).squeeze(dim=0)
             imgs = imgs.cpu().numpy()
 
             if self.log_rmses:
@@ -231,33 +248,42 @@ class GeneralizedBCS(ReconstructionAlgorithm):
         alpha: Tensor,
         y: Tensor,
         Phi: Projection,
-        num_cg_iters: int
+        num_cg_iters: int,
     ) -> Tuple[Tensor, Tensor, bool]:
-        C, H, W = y.size()
-        b0 = self.alpha0 * Phi.T(y.unsqueeze(dim=0))
+        N, C, H, W = y.size()
+        # b0 = Phi.T(y.unsqueeze(dim=0))
+        coils = self.coils
+        b0 = self.alpha0 * torch.sum(torch.conj(coils) * self.fourier.T(y), dim=1, keepdim=True).real # N x 1 x H x W
+        b0 = b0.unsqueeze(dim=0)
         # b0 = self.alpha0 * self.sparse_proj(ifftn(y.unsqueeze(dim=0), dim=(-2, -1), norm='ortho').real)
         # b0 = self.alpha0 * self.sparse_proj.T(ifftn(y.unsqueeze(dim=0), dim=(-2, -1), norm='ortho').real)
         # b0 = self.alpha0 * ifftn(y.unsqueeze(dim=0), dim=(-2, -1), norm='ortho').real
         # b1 = self._samp_probes(self.num_probes, C, H, W)
 
-        alpha = alpha.unsqueeze(dim=0).unsqueeze(dim=0)
+        alpha = alpha.unsqueeze(dim=0)
+        coils = coils.unsqueeze(dim=0)
 
         # b0 = Phi.T(y.unsqueeze(dim=0))
-        b1 = self._samp_probes(self.num_probes, C, H, W)
-        b2 = alpha * b0
-        b = torch.cat([b0, b1, b2], dim=0)
+        b1 = self._samp_probes(self.num_probes, N, 1, H, W)
+        # b2 = alpha * b0
+        b = torch.cat([b0, b1], dim=0)
         # A = lambda x: (Phi.T(Phi(x))) + alpha * x
 
         # d = 1 / (self.diag_estimate.unsqueeze(dim=0) + alpha)
         # print('Diag size', d.size())
-        A = lambda x: (self.alpha0 * (Phi.T(Phi(x))) + alpha * x)
+        A = lambda x: (
+            self.alpha0 * (torch.sum(torch.conj(coils) * self.fourier.T(self.fourier(coils * x)), dim=2, keepdim=True)) \
+            + alpha * x
+        )
+        A = self.alpha0 * torch.sum(torch.conj(coils) * coils, dim=2, keepdim=True) + alpha
+        A_inv = 1 / A.real
         # b = d * b
         #
         # Phi_sub = Sequential(
         #     [self.sparse_proj, UndersampledFourier2D(mask=Phi.projs[1].mask[0, 0])],
         #     [False, True]
         # )
-        # A_sub = lambda x: d[0, 0, 0] * (self.alpha0 * (Phi_sub.T(Phi_sub(x))) + alpha.squeeze(dim=0).squeeze(dim=1) * x)
+        # A_sub = lambda x: (self.alpha0 * (Phi_sub.T(Phi_sub(x))) + alpha.squeeze(dim=0).squeeze(dim=1) * x)
         # X = torch.eye(128 * 128).view(128 * 128, 128, 128)
         # matrix = A_sub(X.unsqueeze(dim=0))
         # matrix = matrix.view(128 * 128, 128 * 128)
@@ -272,19 +298,21 @@ class GeneralizedBCS(ReconstructionAlgorithm):
             # alpha_ratio = alpha_diff / (torch.abs(alpha).mean()).item()
             # print(mu_new.mean(), sigma_diag_new.mean())
             # print(alpha_ratio)
-            resid = torch.abs(b - A(x)).max()
+            resid = torch.sqrt((b - A(x)) ** 2).max()
             print('resid', resid)
             # return alpha_ratio < self.max_alpha_ratio
-            return resid < 1
+            return resid < 1e-1
 
-        x, converged = conjugate_gradient(
-            A, b, (-2, -1), num_cg_iters, self.cg_tol, stop_criterion=stop_criterion
-        )
+        # x, converged = conjugate_gradient(
+        #     A, b, (-2, -1), num_cg_iters, self.cg_tol, stop_criterion=stop_criterion
+        # )
         # x = b / (self.alpha0 + alpha)
         # converged = True
+        x = A_inv * b
 
         mu = x[0]
-        sigma_diag = (b1 * x[1:-1]).mean(dim=0).clamp(min=0)
+        sigma_diag = (b1 * x[1:]).mean(dim=0).clamp(min=0)
+        converged = True
         # self.factor = (b0[0] * b2[0]).sum(dim=(-2, -1), keepdim=True) - (x[-1] * b2[0]).sum(dim=(-2, -1), keepdim=True)
         # sigma_diag = 1 / (self.alpha0 + alpha.squeeze(dim=0))
         # self.alpha0 = ((alpha.squeeze(dim=0) * sigma_diag).sum()) / (torch.abs(y - Phi(mu.unsqueeze(dim=0)).squeeze(dim=0)) ** 2).sum()
@@ -292,7 +320,7 @@ class GeneralizedBCS(ReconstructionAlgorithm):
         return mu, sigma_diag, converged
 
     def _mstep(self, mu: Tensor, sigma_diag: Tensor):
-        alpha = 1 / (mu ** 2 + sigma_diag).mean(dim=0)
+        alpha = 1 / (mu ** 2 + sigma_diag).mean(dim=0, keepdim=True)
         # factor = (0.25 * 128 * 128 + 2 * 1e5) / (self.factor + 2 * 1)
         # alpha = 1 / (mu ** 2 * factor + sigma_diag).mean(dim=0)
         return alpha
@@ -307,9 +335,19 @@ class GeneralizedBCS(ReconstructionAlgorithm):
         scale: float
     ) -> Tensor:
         # img = self.sparse_proj.T(mu.unsqueeze(dim=0)).squeeze(dim=0)
-        img = torch.cumsum(mu, dim=-2)
+        # img = torch.cumsum(mu, dim=-2)
         # img = self.sparse_proj(mu.unsqueeze(dim=0)).squeeze(dim=0)
         # img = mu
+
+        img = mu
+        # mu = fftn(mu, dim=(-2, -1), norm='ortho')
+        # N, C, H, W = mu.size()
+        # k = torch.arange(H, device=mu.device).view(1, -1, 1)
+        # factor = 1 - torch.exp(-2 * np.pi * 1j * k / H)
+        # denom = torch.abs(factor) ** 2
+        # denom[:, 0, :] = 1
+        # mu =  torch.conj(factor) / denom * mu
+        # img = ifftn(mu, dim=(-2, -1), norm='ortho').real
 
         # if self.normalize:
         #     img = img * scale + bias
