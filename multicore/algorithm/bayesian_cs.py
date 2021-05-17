@@ -22,7 +22,7 @@ from multicore.projections import (
     Undersampled2DFastFourierTransform,
     GradientTransform
 )
-from multicore.utils import conjugate_gradient
+from multicore.utils import conjugate_gradient, conj_grad
 from multicore.metric import RootMeanSquareError
 
 
@@ -46,6 +46,8 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
         tie_real_imag: bool = True,
         normalize: bool = True,
         save_img: bool = False,
+        use_new_cg: bool = False,
+        max_cg_iters: float = 1e-7,
         device: Optional[str] = None
     ) -> None:
         if grad_dim not in ['x', 'y', 'xy']:
@@ -77,6 +79,8 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
         if device is None:
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.device = device
+        self.use_new_cg = use_new_cg
+        self.max_cg_iters = max_cg_iters
         self.bernoulli = Bernoulli(probs=torch.tensor(0.5, device=device))
 
     @torch.no_grad()
@@ -174,7 +178,10 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
         if self.save_img:
             _pred_imgs = imgs.transpose(1, 2, 0)
             _kmasks = np.array(dataset.kmasks).transpose(1, 2, 0)
-            savemat('bcs.mat', {'pred_img': _pred_imgs, 'kmasks': _kmasks})
+            out = {'pred_img': _pred_imgs, 'kmasks': _kmasks}
+            if self.log_variances:
+                out['variances'] = variances.transpose(1, 2, 0)
+            savemat('bcs.mat', out)
 
         return imgs
 
@@ -285,7 +292,13 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
             # print('resid', resid)
             return alpha_ratio < self.max_alpha_ratio
 
-        x, converged = conjugate_gradient(A, b, -1, num_cg_iters, self.cg_tol, stop_criterion=stop_criterion)
+        if self.use_new_cg:
+            x, converge_iter = conj_grad(
+                A, b, dim=-1, max_iters=self.max_cg_iters, tol=self.cg_tol
+            )
+            converged = True
+        else:
+            x, converged = conjugate_gradient(A, b, -1, num_cg_iters, self.cg_tol, stop_criterion=stop_criterion)
         mu = x[0]
         sigma_diag = (b1 * x[1:]).mean(dim=0).clamp(min=0)
         return mu, sigma_diag, converged
@@ -415,7 +428,7 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
 
         alpha = alpha.unsqueeze(dim=1).unsqueeze(dim=0)
         A = lambda x: self.alpha0 * (Phi.T(Phi(x))) + alpha * x
-        out = conjugate_gradient(A, b, -1, num_cg_iters, cg_tol)
+        out, _ = conjugate_gradient(A, b, -1, num_cg_iters, cg_tol)
 
         out = out.unflatten(dim=-1, sizes=(size_x, size_y))
         out = fftn(out, dim=(-2, -1), norm='ortho')

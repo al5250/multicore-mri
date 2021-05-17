@@ -1,4 +1,5 @@
 from typing import Tuple, Callable, Union, Optional
+import warnings
 
 import torch
 from torch import Tensor
@@ -54,47 +55,55 @@ def conj_grad(
     A: Callable[[Tensor], Tensor],
     b: Tensor,
     dim: Union[int, Tuple[int, ...]],
-    T: int,
-    tol: float = 1e-10,
-    stop_criterion: Optional[Callable[[Tensor], bool]] = None
-) -> Tuple[Tensor, bool]:
+    max_iters: int = 1000,
+    tol: float = 1e-10
+) -> Tuple[Tensor, Optional[int]]:
     x = torch.zeros_like(b)
     r = b
     p = r
     rr = torch.sum(r * r, dim=dim, keepdim=True)
+    t = 0
 
-    if stop_criterion is None:
-        stop_criterion = lambda x: True
+    for t in range(max_iters):
+        Ap = A(p)
+        pAp = torch.sum(p * Ap, dim=dim, keepdim=True)
+        alpha = rr / pAp
+        x = x + alpha * p
+        r = r - alpha * Ap
 
-    cont = True
-    iter_id = 0
-    while cont and iter_id < 20:
-        print(f'Got here {iter_id + 1}')
-        for t in range(T):
-            Ap = A(p)
-            pAp = torch.sum(p * Ap, dim=dim, keepdim=True)
+        eps = (torch.norm(r) / torch.norm(b)) ** 2
+        # print(eps)
+        if eps < tol:
+            return x, t
 
-            alpha = rr / pAp
-            x = x + alpha * p
+        rr_old = rr
+        rr = torch.sum(r * r, dim=dim, keepdim=True)
+        beta = rr / rr_old
+        p = r + beta * p
 
-            r = r - alpha * Ap
+    warnings.warn(
+        f'Conjugate gradient failed to converge to a tolerance level of {tol:.3e} '
+        f'after {max_iters} iterations.  Exiting with an error of {eps:.3e}.',
+        stacklevel=1
+    )
+    return x, None
 
-            metric = (torch.norm(r) / torch.norm(b)) ** 2
-            print(metric)
-            if (metric < tol):
-            # if torch.all(torch.abs(r) < tol):
-                return x, True
 
-            rr_old = rr
-            rr = torch.sum(r * r, dim=dim, keepdim=True)
-            beta = rr / rr_old
-            p = r + beta * p
-        cont = not stop_criterion(x)
-        iter_id += 1
-    if cont:
-        return x, False
+def get_torch_device(device_str: Optional[str]) -> torch.device:
+    if device_str is None:
+        cuda_available = torch.cuda.is_available()
+        return torch.device('cuda') if cuda_available else torch.device('cpu')
     else:
-        return x, True
+        return torch.device(device_str)
+
+
+def get_torch_dtypes(precision: Optional[str]) -> torch.dtype:
+    if precision == 'float':
+        return torch.float, torch.cfloat
+    elif precision == 'double' or precision is None:
+        return torch.double, torch.cdouble
+    else:
+        raise ValueError('Argument `precision` must be either `float` or `double`.')
 
 
 def finite_diff_2d(data: Tensor, keep_dim: bool = True) -> Tuple[Tensor, Tensor]:

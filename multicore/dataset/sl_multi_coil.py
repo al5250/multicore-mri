@@ -46,8 +46,6 @@ class SheppLoganMultiCoilDataset(MRIDataset):
         mask2 = ifftshift(mask2)
         mask3 = ifftshift(mask3)
 
-        pdb.set_trace()
-
         kmasks = np.stack([mask1, mask2, mask3], axis=0)
         self._kmasks = np.stack([kmasks] * 8, axis=1)
         # mask[:, 0:16] = True
@@ -95,4 +93,8 @@ class SheppLoganMultiCoilDataset(MRIDataset):
 
     @property
     def names(self) -> List[str]:
-        return ['Image']
+        return ['Image1', 'Image2', 'Image3']
+
+    @property
+    def coil_sens(self) -> ndarray:
+        return self.coils

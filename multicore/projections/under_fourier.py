@@ -11,34 +11,16 @@ from multicore.projections.projection import Projection
 
 class UndersampledFourier2D(Projection):
 
-    def __init__(self, mask: Tensor, real_input: bool = True, apply_grad=False) -> None:
+    def __init__(self, mask: Tensor) -> None:
         self.mask = mask
-        self.real_input = real_input
-        self.apply_grad = apply_grad
 
     def apply(self, x: Tensor) -> Tensor:
         y = fftn(x, dim=(-2, -1), norm='ortho')
-        if self.apply_grad:
-            _, _, H, W = y.size()
-            k = torch.arange(H, device=y.device).view(1, 1, -1, 1)
-            factor = 1 - torch.exp(-2 * np.pi * 1j * k / H)
-            denom = torch.abs(factor) ** 2
-            denom[:, :, 0, :] = 1
-            y = torch.conj(factor) / denom * y
         y[..., ~self.mask] = 0
         return y
 
     def T_apply(self, y: Tensor) -> Tensor:
         if not torch.all(y[..., ~self.mask] == 0):
-            pdb.set_trace()
-        if self.apply_grad:
-            _, _, H, W = y.size()
-            k = torch.arange(H, device=y.device).view(1, 1, -1, 1)
-            factor = 1 - torch.exp(-2 * np.pi * 1j * k / H)
-            denom = torch.abs(factor) ** 2
-            denom[:, :, 0, :] = 1
-            y = factor / denom * y
+            raise ValueError('Invalid input to UndersampledFourier2D disobeys mask.')
         x = ifftn(y, dim=(-2, -1), norm='ortho')
-        if self.real_input:
-            x = x.real
         return x

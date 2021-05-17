@@ -76,12 +76,17 @@ class Wavelet2D(Projection):
     @staticmethod
     def flatten4d(x: Tensor) -> Tuple[Tensor, Tuple[int, ...]]:
         shape = x.size()
-        if len(shape) > 4:
+        num_dim = len(shape)
+        if num_dim > 4:
             x = x.flatten(start_dim=0, end_dim=-4)
+        elif num_dim == 3:
+            x = x.unsqueeze(dim=0)
         return x, shape
 
     @staticmethod
     def unflatten4d(x: Tensor, shape: Tuple[int, ...]) -> Tensor:
         if len(shape) > 4:
             x = x.unflatten(dim=0, sizes=shape[:-3])
+        elif x.size(dim=0) == 1:
+            x = x.squeeze(dim=0)
         return x

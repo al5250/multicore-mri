@@ -1,0 +1,16 @@
+# @package _group_
+_target_: multicore.algorithm.MultiSENSE
+log_rmses: True
+num_probes: 5
+num_em_iters: 40
+max_cg_iters: 500
+log_imgs_interval: 1
+log_final_variances: False
+alpha0: 1e6
+alpha_init: 1
+cg_tol: 1e-5
+sparse_proj:
+  _target_: multicore.projections.Wavelet2D
+  num_levels: 4
+  wave: db2
+  mode: periodization

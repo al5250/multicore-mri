@@ -1,0 +1,7 @@
+# @package _group_
+_target_: multicore.algorithm.SENSE
+cg_tol: 1e-5
+max_cg_iters: 500
+reg_penalty: 1e-5
+compute_variances: True
+num_probes_for_variances: 5

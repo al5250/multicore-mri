@@ -14,3 +14,6 @@ tie_real_imag: True
 alpha_init: 1e3
 normalize: True
 save_img: ~
+use_new_cg: False
+max_cg_iters: 400
+cg_tol: 1e-7
