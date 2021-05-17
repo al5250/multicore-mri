@@ -27,7 +27,7 @@ def conjugate_gradient(
     cont = True
     iter_id = 0
     while cont and iter_id < 20:
-        print(f'Got here {iter_id + 1}')
+        # print(f'Got here {iter_id + 1}')
         for t in range(T):
             Ap = A(p)
             pAp = torch.sum(p * Ap, dim=dim, keepdim=True)

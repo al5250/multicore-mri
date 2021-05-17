@@ -157,6 +157,8 @@ class BayesianCompressedSensing(ReconstructionAlgorithm):
         Phi = Undersampled2DFastFourierTransform(index=kindices, size=(size_x, size_y))
         alpha_init = self.alpha_init * torch.ones(self.num_grads, size_x * size_y, device=self.device)
 
+        print('Iteration', 'Time', 'RMSE')
+
         alpha, mu, sigma_diag, imgs = self._fastem(
             data, Phi, alpha_init, kspaces, dataset, logger
         )
